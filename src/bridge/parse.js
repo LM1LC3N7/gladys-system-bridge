@@ -136,7 +136,9 @@ function gpus(value, platform) {
     const name = label(g.name) ?? `GPU ${index + 1}`;
     // Under Windows, the "temperature" of a GPU other than NVIDIA is an ACPI
     // thermal zone of the board (the CPU's): not published as the GPU's.
-    const trusted = platform !== 'windows' || /nvidia/i.test(name);
+    // Decided on the id System Bridge gives an NVIDIA card (`nvidia-<n>`), never
+    // on the name, which any card can carry.
+    const trusted = platform !== 'windows' || /^nvidia-\d+$/i.test(String(g.id).trim());
     out.push({
       key,
       name,

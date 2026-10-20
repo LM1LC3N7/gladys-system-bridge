@@ -102,6 +102,41 @@ test('a frame dripped one byte per chunk is parsed in linear time', () => {
   assert.ok(ms < 1_500, `${ms} ms`);
 });
 
+test('a 4 MiB frame in 1 M one-byte chunks: no chunk kept, the payload allocated once', () => {
+  const socket = deafSocket();
+  const state = { messages: [], closed: null };
+  const ws = new WebSocketConnection(socket, Buffer.alloc(0), {
+    maxMessageBytes: 4 * 1024 * 1024,
+    onMessage: (text) => state.messages.push(text),
+    onClose: (err) => {
+      state.closed = err;
+    },
+  });
+  const length = 4 * 1024 * 1024;
+  const header = Buffer.alloc(10);
+  header[0] = 0x81;
+  header[1] = 127;
+  header.writeUInt32BE(length, 6);
+  const payload = Buffer.alloc(length, 0x78); // "xxx..."
+  payload[0] = 0x22;
+  payload[length - 1] = 0x22;
+  const bytes = Buffer.concat([header, payload]);
+  const before = process.memoryUsage();
+  let maxQueued = 0;
+  for (let i = 0; i < bytes.length; i += 1) {
+    socket.emit('data', bytes.subarray(i, i + 1));
+    if ((i & 0xffff) === 0) maxQueued = Math.max(maxQueued, ws.queuedChunks);
+  }
+  const after = process.memoryUsage();
+  assert.equal(state.closed, null);
+  assert.equal(state.messages.length, 1);
+  assert.equal(state.messages[0].length, length);
+  assert.ok(maxQueued <= 10, `${maxQueued} chunks kept`);
+  assert.equal(ws.queuedChunks, 0);
+  const grown = (after.heapUsed - before.heapUsed) / 1024 / 1024;
+  assert.ok(grown < 64, `heap +${grown.toFixed(1)} MiB`);
+});
+
 test('reserved and binary opcodes are refused from the header; a 1-byte close too', () => {
   for (const bytes of [
     Buffer.from([0x83, 0x05]), // opcode 3, payload not even received

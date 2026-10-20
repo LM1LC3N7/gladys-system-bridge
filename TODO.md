@@ -98,8 +98,8 @@ up to date at the end of every milestone.
   the SHA-1 of the exact mount point (`_` never appears in the simple keys).
 - **GPU keys come from the GPU id only** (`[A-Za-z0-9-]`, 32 at most: the id
   lowercased; else slug, `_` and a hash); a GPU without id is left out, never
-  keyed by its position. Under Windows the temperature of a GPU whose name is
-  not NVIDIA is not published: Windows reports an ACPI thermal zone (the CPU
+  keyed by its position. Under Windows the temperature of a GPU whose id is
+  not `nvidia-<n>` is not published (decided on the id, never on the name): Windows reports an ACPI thermal zone (the CPU
   side) for it. Whether the ids are stable under Windows is to check on a
   real PC (milestone 2).
 - **No percent unit for CPU, memory, disk and GPU load**: no core category
@@ -131,7 +131,9 @@ up to date at the end of every milestone.
   saved meanwhile cancels the command; one such command at a time; nothing
   written after 3.5 s (`sendBy`, also when a connection opening is shared
   with a reading); Gladys answered at 4.3 s at most.
-- **WebSocket limits** (review 1): 4 MiB and 1024 frames per message, no
+- **WebSocket limits** (review 1): a frame whose header is known is copied
+  into one buffer of its announced size (4 MiB at most) as its bytes arrive,
+  no chunk kept; 4 MiB and 1024 frames per message, no
   empty non-final continuation, one pong waiting, 100 pings in a row, a
   pong never written past 64 KiB waiting in the socket, 50 messages or
   8 MiB received while nothing was asked (then the socket is closed and the

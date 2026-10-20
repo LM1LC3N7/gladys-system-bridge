@@ -78,7 +78,7 @@ export function windowsModules(overrides = {}) {
       ],
     },
     battery: { is_charging: null, percentage: null, time_remaining: null },
-    gpus: [{ id: 'GPU-0a1b', name: 'NVIDIA RTX 4060', core_load: 3, temperature: 41 }],
+    gpus: [{ id: 'nvidia-0', name: 'NVIDIA RTX 4060', core_load: 3, temperature: 41 }],
     ...overrides,
   };
 }

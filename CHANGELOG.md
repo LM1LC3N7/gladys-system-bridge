@@ -38,7 +38,9 @@ the notes of the version's GitHub Release.
   than 1024 frames or an empty non-final continuation closes the connection;
   one pong waiting at most, 100 pings in a row at most, nothing written to a
   peer that does not read; binary, reserved and unknown opcodes refused from
-  the header; the byte queue parsed in linear time; a 101 without
+  the header; the byte queue parsed in linear time, and a frame whose header
+  is known is copied into one buffer of its size as it arrives (no chunk
+  kept: a frame dripped byte by byte costs its own size, not 200 times it); a 101 without
   `Connection: Upgrade` or with a subprotocol refused; a 1-byte close frame
   refused; messages nobody asked for (50, or 8 MiB) close the socket.
 - A command is never written later than 3.5 s after it arrived, even when the
@@ -64,7 +66,7 @@ the notes of the version's GitHub Release.
 - Disk keys are unique per mount point (`/` is `root`, `/mnt/data` is
   `mnt-data`, any other mount point gets a short hash: `/root`,
   `/mnt-data`...); a GPU is keyed by its id only (none: left out). Under
-  Windows, the temperature of a GPU other than NVIDIA (an ACPI zone of the
-  board) is not published.
+  Windows, the temperature of a GPU whose id is not `nvidia-<n>` (an ACPI
+  zone of the board) is not published.
 
 [Unreleased]: https://github.com/LM1LC3N7/gladys-system-bridge/commits/main

@@ -24,7 +24,7 @@ test('a Windows PC', () => {
     { key: 'd', label: 'D:\\', percent: 10 },
   ]);
   assert.deepEqual(s.gpus, [
-    { key: 'gpu-0a1b', name: 'NVIDIA RTX 4060', load: 3, temperature: 41 },
+    { key: 'nvidia-0', name: 'NVIDIA RTX 4060', load: 3, temperature: 41 },
   ]);
   assert.equal(s.battery, null);
   assert.equal(s.batteryCharging, null);
@@ -153,6 +153,8 @@ test('GPU keys come from the id only; under Windows, a non-NVIDIA temperature is
         { name: 'no id', core_load: 1 },
         { id: 'VideoController1', name: 'Intel UHD 770', core_load: 2, temperature: 55 },
         { id: 'nvidia-0', name: 'NVIDIA RTX 4060', core_load: 3, temperature: 41 },
+        // The name says NVIDIA, the id does not: the id decides.
+        { id: 'VideoController2', name: 'NVIDIA RTX 4060', core_load: 3, temperature: 52 },
       ],
     }),
   );
@@ -161,6 +163,7 @@ test('GPU keys come from the id only; under Windows, a non-NVIDIA temperature is
     [
       ['videocontroller1', null],
       ['nvidia-0', 41],
+      ['videocontroller2', null],
     ],
   );
   const linux = parseSnapshot(

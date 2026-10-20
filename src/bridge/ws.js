@@ -163,6 +163,8 @@ export class WebSocketConnection {
   #fragments = null;
   #fragmentBytes = 0;
   #pongPending = false;
+  /** The frame being received: { fin, opcode, payload (its final size), filled }. */
+  #partial = null;
   #pingsInARow = 0;
   #closeTimer = null;
   #finished = false;
@@ -183,6 +185,11 @@ export class WebSocketConnection {
     );
     socket.on('close', () => this.#finish(new BridgeError(CODES.CLOSED, 'connection closed')));
     if (head?.length) this.#receive(head);
+  }
+
+  /** The chunks waiting in the queue (a frame header being received, at most a few). */
+  get queuedChunks() {
+    return this.#chunks.length - this.#head;
   }
 
   /** Send a text message. Resolves true once written, false when the connection is not open. */
@@ -219,6 +226,7 @@ export class WebSocketConnection {
     this.#offset = 0;
     this.#buffered = 0;
     this.#fragments = null;
+    this.#partial = null;
     if (!this.#closeTimer) this.#socket.destroy();
     else this.#socket.once('close', () => clearTimeout(this.#closeTimer));
     try {
@@ -293,6 +301,20 @@ export class WebSocketConnection {
 
   #receive(chunk) {
     if (this.#finished) return;
+    if (this.#partial) {
+      // A frame whose header is known: its bytes go straight into its buffer,
+      // allocated once; the chunks themselves are never kept.
+      const frame = this.#partial;
+      const take = Math.min(chunk.length, frame.payload.length - frame.filled);
+      chunk.copy(frame.payload, frame.filled, 0, take);
+      frame.filled += take;
+      if (frame.filled < frame.payload.length) return;
+      this.#partial = null;
+      this.#frameReceived(frame.fin, frame.opcode, frame.payload);
+      if (take === chunk.length) return;
+      chunk = chunk.subarray(take);
+      if (this.#finished) return;
+    }
     this.#chunks.push(chunk);
     this.#buffered += chunk.length;
     while (!this.#finished && this.#buffered >= 2) {
@@ -330,8 +352,20 @@ export class WebSocketConnection {
       if (opcode === OPCODES.CLOSE && length === 1) {
         return this.#fail(CODES.BAD_ANSWER, 'invalid close frame');
       }
-      if (this.#buffered < headerLength + length) return;
+      if (this.#buffered < headerLength) return;
       this.#read(headerLength, true);
+      if (this.#buffered < length) {
+        // Incomplete: the payload buffer is allocated now (bounded above), what
+        // is buffered is copied into it, and the queue is emptied.
+        const payload = Buffer.allocUnsafe(length);
+        const filled = this.#buffered;
+        if (filled > 0) this.#read(filled, true).copy(payload, 0);
+        this.#chunks = [];
+        this.#head = 0;
+        this.#offset = 0;
+        this.#partial = { fin, opcode, payload, filled };
+        return;
+      }
       const payload = length > 0 ? this.#read(length, true) : Buffer.alloc(0);
       this.#frameReceived(fin, opcode, payload);
     }
