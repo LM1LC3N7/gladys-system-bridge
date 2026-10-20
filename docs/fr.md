@@ -1,67 +1,100 @@
-# Template de démonstration
+# System Bridge
 
-Ceci est la documentation utilisateur de l'intégration. Gladys ré-héberge ce
-fichier et affiche un lien **Documentation** permanent vers lui dans l'écran
-de configuration (dans la langue de l'utilisateur, avec l'anglais en repli) —
-c'est au moment de configurer que l'utilisateur en a le plus besoin. Gardez
-les courtes indications d'accueil dans les blocs `section` du `config_schema`
-du manifest ; mettez ici le pas-à-pas détaillé (captures d'écran, dépannage…).
+Suivez un PC Windows ou Linux depuis Gladys grâce à
+[System Bridge](https://system-bridge.timmo.dev), une application libre et
+gratuite qui tourne sur le PC : s'il est allumé, charge du CPU et de la
+mémoire, occupation des disques, GPU, batterie, utilisateurs connectés, durée
+de fonctionnement, caméra et micro utilisés ; et des boutons pour le
+verrouiller, le mettre en veille ou en hibernation, le redémarrer, l'éteindre,
+ou ouvrir une page dans son navigateur.
+
+**Intégration non officielle, sans lien avec System Bridge. Elle n'a jamais été
+testée avec un vrai PC : merci de signaler ce que vous voyez.**
+
+## Installation
+
+1. Installez System Bridge sur le PC (Windows ou Linux) et lancez-le. Il écoute
+   sur le port **9170** ; laissez-le passer dans le pare-feu du PC pour votre
+   réseau local seulement.
+2. Dans les réglages de System Bridge, copiez le **jeton d'API**.
+3. Dans Gladys, ouvrez cette intégration et remplissez :
+   - **Adresse du PC** : son adresse IP ou son nom, ex. `192.168.1.20`
+     (ajoutez `:port` si vous avez changé 9170). Donnez au PC une adresse fixe
+     dans votre box.
+   - **Jeton** : le jeton copié plus haut. Il est gardé par Gladys dans sa
+     base, jamais réaffiché, envoyé seulement à System Bridge, et jamais écrit
+     dans les journaux.
+4. Appuyez sur **Tester la connexion**, puis ouvrez l'onglet **Découverte** et
+   ajoutez le PC.
+
+System Bridge n'a pas de https : le jeton et les mesures traversent votre
+réseau en clair. Utilisez-le seulement sur un réseau domestique de confiance,
+jamais par Internet.
 
 ## Ce que vous obtenez
 
-Six appareils de démonstration apparaissent après l'installation : une
-station météo (vraies données Open-Meteo), un interrupteur, une lampe
-variable, une prise connectée avec mesure de puissance, un détecteur de
-mouvement et une caméra.
+Un appareil par PC, nommé d'après le PC et identifié par son identifiant de
+machine (il survit à un changement de nom ou d'adresse IP) :
 
-## Configuration
+| Fonction                                                 | Signification                                                                |
+| -------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| Online                                                   | 1 tant que le PC répond, 0 s'il est éteint, en veille ou absent              |
+| CPU (%), CPU                                             | charge, et température quand le PC la donne                                  |
+| Memory (%), Memory used                                  | charge, et Mo utilisés                                                       |
+| Disk … (%)                                               | occupation de chaque disque (12 au plus) ; les montages système sont ignorés |
+| GPU (%), température du GPU                              | par carte graphique (4 au plus), si fournies                                 |
+| Battery, Charging                                        | portables seulement                                                          |
+| Power                                                    | si System Bridge la fournit                                                  |
+| Users logged in, Uptime                                  | sessions ouvertes, heures depuis le dernier démarrage                        |
+| Camera in use, Microphone in use                         | 1 tant qu'une application les utilise                                        |
+| Restart pending, System Bridge update available          | si fournis                                                                   |
+| Lock, Sleep, Hibernate, Restart, Shut down, Open the URL | boutons                                                                      |
 
-1. Ouvrez l'onglet **Configuration** de l'intégration.
-2. Renseignez la **latitude** et la **longitude** que la station météo de
-   démonstration doit observer (Paris par défaut), et choisissez votre unité
-   de température. L'**intervalle de rafraîchissement** règle la fréquence
-   de lecture de la station météo et de la puissance de la prise : toutes
-   les 5 minutes par défaut, toutes les minutes au plus.
-3. Enregistrez : les appareils apparaissent dans l'onglet **Découverte**,
-   prêts à être ajoutés.
+Un disque ou un GPU vu une fois reste sur l'appareil (sans valeur tant qu'il
+est absent), pour ne jamais perdre son historique.
 
-Le réglage **Préférer la connexion locale** pilote la prise de
-démonstration : elle affiche en badge le canal réellement utilisé (local ou
-cloud), avec un point orange quand elle fonctionne en mode dégradé (local
-refusé, bascule cloud).
+Le PC est lu au rythme choisi dans **Rafraîchissement** (toutes les minutes par
+défaut). Quand il ne répond pas, Gladys réessaie 30 secondes à 5 minutes plus
+tard, jamais plus vite que ce rythme.
 
-## Actions
+## Boutons et sécurité
 
-- **Tester le fournisseur météo** — effectue une requête en direct vers
-  Open-Meteo et affiche la température et l'humidité actuelles sous le
-  bouton.
-- **Identifier un appareil** — choisissez un de vos appareils dans la liste
-  et il se signale (la lampe de démonstration « clignote » dans les logs).
+- **Verrouiller** (Lock) verrouille la session ; il est toujours permis (il
+  protège le PC).
+- **Veille, Hibernation, Redémarrer, Éteindre** sont refusés tant que vous ne
+  cochez pas **Autoriser la veille, l'hibernation, le redémarrage et l'arrêt**.
+  Le travail non enregistré sur le PC est perdu au redémarrage ou à l'arrêt. Ne
+  les autorisez jamais sur le PC qui fait tourner Gladys.
+- **Ouvrir l'URL** est refusé tant que vous ne cochez pas **Autoriser
+  l'ouverture de l'URL** et ne saisissez pas une adresse http ou https : elle
+  ouvre cette page dans le navigateur par défaut du PC. Jamais un fichier, un
+  chemin ni un programme.
+- Ce sont des boutons, jamais des interrupteurs : ni assistant vocal ni scène
+  « tout éteindre » ne les atteint. Dans une scène, utilisez l'action « changer
+  la valeur d'un appareil » sur le bouton.
+- Avant une veille, un redémarrage, un arrêt ou une URL, Gladys relit le PC et
+  vérifie que c'est la même machine. Si cette vérification ne tient pas dans
+  les 5 secondes de Gladys, rien n'est envoyé. Une fois envoyée, si System
+  Bridge ne confirme pas à temps, Gladys dit « envoyée, sans confirmation »
+  (elle a pu s'exécuter).
+- Gladys n'envoie **jamais** de ligne de commande, de frappe au clavier, de
+  notification, de fichier ni de chemin, même si System Bridge les accepte.
 
-## Scènes
+## En cas de problème
 
-L'intégration ajoute ses propres cartes à l'éditeur de scènes (Gladys 5.1
-ou plus récent), dans la catégorie **Intégrations** :
+- _Le PC ne répond pas_ : il est éteint, en veille, System Bridge n'est pas
+  lancé, ou le pare-feu bloque le port 9170.
+- _System Bridge a refusé le jeton_ : recopiez le jeton depuis les réglages de
+  System Bridge et enregistrez. Gladys ne renvoie pas seul un jeton refusé
+  avant 6 heures.
+- _Ne répond pas comme System Bridge_ : vérifiez le port.
+- _Ralentir_ : System Bridge (ou un intermédiaire) a répondu HTTP 429 ou 503 ;
+  toutes les requêtes sont suspendues (1 minute à 6 heures), même après un
+  redémarrage. Le bouton de test lève la pause.
 
-- **Mouvement détecté** (déclencheur) — lance la scène quand un détecteur
-  de démonstration voit bouger quelque chose. Choisissez éventuellement le
-  détecteur et ce qui a bougé (personne, animal) ; laissés vides, toute
-  détection correspond. Les actions suivantes peuvent lire ce qui a bougé
-  avec `{{triggerEvent.data.target}}`.
-- **Identifier un appareil** (action) — fait se signaler l'appareil choisi.
-  Elle indique si l'appareil a pu se signaler, pour que les actions
-  suivantes puissent en dépendre.
+## Vie privée
 
-## Tableau de bord
-
-Ajoutez le widget **État de la démo** à un tableau de bord : il affiche en
-direct la température de la station météo et la puissance de la prise du
-bureau, la connexion utilisée par la prise (en orange si dégradée) et la
-position observée. Son bouton **Identifier la lampe** fait se signaler la
-lampe de démonstration.
-
-## Dépannage
-
-L'intégration journalise tout ce qu'elle fait : consultez les logs de
-l'intégration depuis l'interface Gladys (ou `docker logs` sur l'hôte) avec
-`LOG_LEVEL=debug` pour le détail complet.
+L'intégration ne lit que les modules cités plus haut : jamais la liste des
+processus, les médias, les connexions réseau ni les notifications. Les noms
+d'utilisateurs, les applications qui utilisent la caméra, les adresses IP et
+MAC ne sont jamais publiés ni journalisés.

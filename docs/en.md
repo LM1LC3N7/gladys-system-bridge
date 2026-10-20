@@ -1,61 +1,94 @@
-# Demo Devices Template
+# System Bridge
 
-This is the user documentation of the integration. Gladys re-hosts this file
-and shows a permanent **Documentation** link to it in the Configuration screen
-(in the user's language, with English as the fallback) — it is when
-configuring that the user needs it most. Keep the short onboarding hints in
-the `section` blocks of the manifest `config_schema`; put the long
-step-by-step (screenshots, troubleshooting…) here.
+Follow a Windows or Linux PC from Gladys through
+[System Bridge](https://system-bridge.timmo.dev), a free and open source
+application that runs on the PC: whether it is on, CPU and memory load, disk
+usage, GPU, battery, users logged in, uptime, camera and microphone in use; and
+buttons to lock, sleep, hibernate, restart or shut it down, or open a page in
+its browser.
+
+**Unofficial integration, not affiliated with System Bridge. It has never been
+tested with a real PC yet: please report what you see.**
+
+## Installation
+
+1. Install System Bridge on the PC (Windows or Linux) and start it. It listens
+   on port **9170**; let it through the firewall of the PC for your local
+   network only.
+2. In the settings of System Bridge, copy the **API token**.
+3. In Gladys, open this integration and fill in:
+   - **Address of the PC**: its IP address or name, e.g. `192.168.1.20` (add
+     `:port` if you changed 9170). Give the PC a fixed address in your router.
+   - **Token**: the token copied above. It is kept by Gladys in its database,
+     never shown again, sent only to System Bridge, and never written in the
+     logs.
+4. Press **Test the connection**, then open the **Discovery** tab and add the
+   PC.
+
+System Bridge has no https: the token and the readings cross your network in
+clear. Use it on a trusted home network only, never through the Internet.
 
 ## What you get
 
-Six demo devices show up after installation: a weather station (real data
-from Open-Meteo), a switch, a dimmable light, a smart plug with power
-metering, a motion sensor and a camera.
+One device per PC, named after the PC and identified by its machine id (it
+survives a rename or a new IP address):
 
-## Configuration
+| Feature                                                  | Meaning                                                     |
+| -------------------------------------------------------- | ----------------------------------------------------------- |
+| Online                                                   | 1 while the PC answers, 0 when it is off, asleep or away    |
+| CPU (%), CPU                                             | load, and temperature when the PC gives it                  |
+| Memory (%), Memory used                                  | load, and MB used                                           |
+| Disk … (%)                                               | usage of each disk (12 at most); system mounts are left out |
+| GPU (%), GPU temperature                                 | per graphics card (4 at most), when reported                |
+| Battery, Charging                                        | laptops only                                                |
+| Power                                                    | when System Bridge reports it                               |
+| Users logged in, Uptime                                  | sessions open, hours since the last start                   |
+| Camera in use, Microphone in use                         | 1 while an application uses them                            |
+| Restart pending, System Bridge update available          | when reported                                               |
+| Lock, Sleep, Hibernate, Restart, Shut down, Open the URL | buttons                                                     |
 
-1. Open the **Configuration** tab of the integration.
-2. Set the **latitude** and **longitude** the demo weather station should
-   observe (they default to Paris), and pick your temperature unit.
-   The **refresh interval** sets how often the weather station and the
-   plug's power are read: every 5 minutes by default, every minute at most.
-3. Save: the devices appear in the **Discovery** tab, ready to be added.
+A disk or a GPU seen once stays on the device (it shows no value while it is
+absent), so that its history is never lost.
 
-The **Prefer the local connection** toggle drives the demo plug: it reports
-the channel it actually uses as a badge (local or cloud), with an orange dot
-when it runs degraded (local refused, cloud fallback).
+The PC is read at the pace chosen in **Refresh** (every minute by default).
+When it does not answer, Gladys tries again 30 seconds to 5 minutes later,
+never faster than that pace.
 
-## Actions
+## Buttons and safety
 
-- **Test the weather provider** — performs a live request to Open-Meteo and
-  shows the current temperature and humidity under the button.
-- **Identify a device** — pick one of your devices in the list and it will
-  signal itself (the demo light "blinks" in the logs).
+- **Lock** locks the session; it is always allowed (it protects the PC).
+- **Sleep, Hibernate, Restart, Shut down** are refused until you tick
+  **Allow sleep, hibernate, restart and shut down**. Unsaved work on the PC is
+  lost on a restart or a shut down. Never allow them on the PC that runs
+  Gladys itself.
+- **Open the URL** is refused until you tick **Allow opening the URL** and
+  type an http or https address: it opens that page in the default browser of
+  the PC. Never a file, a path nor a program.
+- They are buttons, never switches: no voice assistant nor "turn everything
+  off" scene reaches them. In a scene, use the "set a device value" action on
+  the button.
+- Before a sleep, restart, shut down or URL, Gladys reads the PC again and
+  checks it is the same machine. If the check does not fit in Gladys' 5
+  seconds, nothing is sent. Once sent, if System Bridge does not confirm in
+  time, Gladys says "sent, without confirmation" (it may have run).
+- Gladys **never** sends a command line, keystrokes, a notification, a file
+  nor a path, even though System Bridge accepts them.
 
-## Scenes
+## When something goes wrong
 
-The integration adds its own cards to the scene editor (Gladys 5.1 or
-later), under the **Integrations** category:
+- _The PC does not answer_: it is off, asleep, System Bridge is not running,
+  or the firewall blocks port 9170.
+- _System Bridge refused the token_: copy the token again from the settings of
+  System Bridge and save. Gladys does not send a refused token again by itself
+  before 6 hours.
+- _Does not answer like System Bridge_: check the port.
+- _Slow down_: System Bridge (or something in between) answered HTTP 429 or
+  503; every request is paused (1 minute to 6 hours), even after a restart.
+  The test button lifts the pause.
 
-- **Motion detected** (trigger) — starts the scene when a demo motion sensor
-  sees something move. Optionally pick the sensor and what moved (person,
-  animal); left empty, any detection matches. The following actions can
-  read what moved with `{{triggerEvent.data.target}}`.
-- **Identify a device** (action) — makes the chosen device signal itself.
-  It returns whether the device could signal itself, so the following
-  actions can depend on it.
+## Privacy
 
-## Dashboard
-
-Add the **Demo status** widget to a dashboard: it shows the live
-temperature of the weather station and the power of the office plug, the
-connection the plug currently uses (orange when degraded) and the observed
-location. Its **Identify the light** button makes the demo light signal
-itself.
-
-## Troubleshooting
-
-The integration logs everything it does: check the integration logs from the
-Gladys UI (or `docker logs` on the host) with `LOG_LEVEL=debug` for the full
-detail.
+The integration reads only the modules listed above: never the list of
+processes, the media, the network connections nor the notifications. Names of
+users, applications using the camera, IP and MAC addresses are never
+published nor logged.

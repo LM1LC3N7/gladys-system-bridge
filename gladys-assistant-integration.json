@@ -1,177 +1,125 @@
 {
   "manifest_version": 1,
   "type": "device",
-  "name": "Demo Devices Template",
+  "name": "System Bridge",
   "description": {
-    "en": "Starter template showing sensors, a switch, a dimmable light and a smart plug.",
-    "fr": "Template de démarrage : capteurs, interrupteur, lampe variable et prise connectée."
+    "en": "Your PC through System Bridge: CPU, memory, disks, GPU, battery, sleep and restart buttons.",
+    "fr": "Votre PC via System Bridge : CPU, mémoire, disques, GPU, batterie, boutons veille et redémarrage."
   },
-  "version": "1.0.0",
-  "docker_image": "ghcr.io/gladysassistant/integration-template-js:1.0.0",
+  "version": "0.1.0",
+  "docker_image": "ghcr.io/lm1lc3n7/gladys-system-bridge:0.1.0",
   "gladys_version": ">=5.1.0",
-  "cover_image": "https://raw.githubusercontent.com/GladysAssistant/integration-template-js/master/cover.png",
-  "categories": ["lighting", "security", "environment"],
-  "transports": ["local", "cloud"],
+  "cover_image": "https://raw.githubusercontent.com/LM1LC3N7/gladys-system-bridge/main/cover.png",
+  "categories": ["network", "services"],
+  "transports": ["local"],
   "config_schema": [
     {
       "key": "intro",
       "type": "section",
-      "label": { "en": "Getting started", "fr": "Pour commencer" },
+      "label": { "en": "How it works", "fr": "Fonctionnement" },
       "description": {
-        "en": "The demo weather station reads real data from the free Open-Meteo API: pick the coordinates to observe. No account, no API key.",
-        "fr": "La station météo de démonstration lit de vraies données via l'API gratuite Open-Meteo : choisissez les coordonnées à observer. Pas de compte, pas de clé d'API."
+        "en": "Install System Bridge (free, open source) on a Windows or Linux PC of your network: Gladys reads it through its local WebSocket API, with its token. The PC becomes a Gladys device (Discovery tab): online, CPU, memory, disks, GPU, battery, users logged in, uptime, and Lock, Sleep, Hibernate, Restart, Shut down and Open the URL buttons. Gladys never sends a command line nor keystrokes. Unofficial integration, not affiliated with System Bridge.",
+        "fr": "Installez System Bridge (libre et gratuit) sur un PC Windows ou Linux de votre réseau : Gladys le lit par son API WebSocket locale, avec son jeton. Le PC devient un appareil Gladys (onglet Découverte) : en ligne, CPU, mémoire, disques, GPU, batterie, utilisateurs connectés, durée de fonctionnement, et des boutons Verrouiller, Veille, Hibernation, Redémarrer, Éteindre et Ouvrir l'URL. Gladys n'envoie jamais de ligne de commande ni de frappe au clavier. Intégration non officielle, sans lien avec System Bridge."
       },
       "links": [
         {
-          "url": "https://open-meteo.com/en/docs",
-          "label": { "en": "Open-Meteo documentation", "fr": "Documentation Open-Meteo" }
+          "url": "https://system-bridge.timmo.dev",
+          "label": { "en": "System Bridge", "fr": "System Bridge" }
         }
       ]
     },
     {
-      "key": "latitude",
-      "type": "number",
-      "label": { "en": "Latitude", "fr": "Latitude" },
+      "key": "host",
+      "type": "string",
+      "label": { "en": "Address of the PC", "fr": "Adresse du PC" },
       "description": {
-        "en": "Latitude used for the demo weather sensor.",
-        "fr": "Latitude utilisée par le capteur météo de démonstration."
+        "en": "The address of the PC on your network, with the port of System Bridge if it is not 9170: 192.168.1.20 or my-pc.local:9170. System Bridge has no https: the token crosses your network in clear, use it on a trusted network only.",
+        "fr": "L'adresse du PC sur votre réseau, avec le port de System Bridge s'il n'est pas 9170 : 192.168.1.20 ou mon-pc.local:9170. System Bridge n'a pas de https : le jeton traverse votre réseau en clair, utilisez-le seulement sur un réseau de confiance."
       },
-      "placeholder": { "en": "e.g. 48.8566", "fr": "ex. 48.8566" },
-      "required": true,
-      "default": 48.8566,
-      "min": -90,
-      "max": 90
+      "placeholder": { "en": "e.g. 192.168.1.20", "fr": "ex. 192.168.1.20" },
+      "required": true
     },
     {
-      "key": "longitude",
-      "type": "number",
-      "label": { "en": "Longitude", "fr": "Longitude" },
+      "key": "token",
+      "type": "secret",
+      "label": { "en": "Token", "fr": "Jeton" },
       "description": {
-        "en": "Longitude used for the demo weather sensor.",
-        "fr": "Longitude utilisée par le capteur météo de démonstration."
+        "en": "The API token shown in the settings of System Bridge on the PC. Kept by Gladys in its database, never shown again, sent only to System Bridge, in each message. It never appears in the logs.",
+        "fr": "Le jeton d'API affiché dans les réglages de System Bridge sur le PC. Gardé par Gladys dans sa base, jamais réaffiché, envoyé seulement à System Bridge, dans chaque message. Il n'apparaît jamais dans les journaux."
       },
-      "placeholder": { "en": "e.g. 2.3522", "fr": "ex. 2.3522" },
-      "required": true,
-      "default": 2.3522,
-      "min": -180,
-      "max": 180
+      "required": true
     },
     {
-      "key": "unit",
+      "key": "refresh_interval",
       "type": "select",
-      "label": { "en": "Temperature unit", "fr": "Unité de température" },
-      "required": false,
-      "default": "celsius",
+      "label": { "en": "Refresh", "fr": "Rafraîchissement" },
+      "description": {
+        "en": "How often Gladys reads the PC. When it does not answer (off, asleep), Gladys tries again 30 seconds to 5 minutes later, never faster than this.",
+        "fr": "Fréquence de lecture du PC. Quand il ne répond pas (éteint, en veille), Gladys réessaie 30 secondes à 5 minutes plus tard, jamais plus vite que ceci."
+      },
+      "required": true,
+      "default": "60",
       "options": [
-        { "value": "celsius", "label": { "en": "Celsius", "fr": "Celsius" } },
-        { "value": "fahrenheit", "label": { "en": "Fahrenheit", "fr": "Fahrenheit" } }
+        { "value": "30", "label": { "en": "Every 30 seconds", "fr": "Toutes les 30 secondes" } },
+        { "value": "60", "label": { "en": "Every minute", "fr": "Toutes les minutes" } },
+        { "value": "120", "label": { "en": "Every 2 minutes", "fr": "Toutes les 2 minutes" } },
+        { "value": "300", "label": { "en": "Every 5 minutes", "fr": "Toutes les 5 minutes" } }
       ]
     },
     {
-      "key": "poll_frequency",
-      "type": "number",
-      "label": { "en": "Refresh interval (s)", "fr": "Intervalle de rafraîchissement (s)" },
+      "key": "security_section",
+      "type": "section",
+      "label": { "en": "Commands", "fr": "Commandes" },
       "description": {
-        "en": "How often sensors are polled, in seconds (one minute minimum).",
-        "fr": "Fréquence d'interrogation des capteurs, en secondes (une minute minimum)."
+        "en": "By default Gladys only reads, and locks the session (Lock button). Sleep, Hibernate, Restart and Shut down are refused unless you allow them below; so is Open the URL. They are buttons, never switches: no voice assistant nor \"turn everything off\" reaches them. Unsaved work on the PC is lost on a restart or a shut down. Never allow them on the PC that runs Gladys itself.",
+        "fr": "Par défaut Gladys ne fait que lire, et verrouiller la session (bouton Verrouiller). Veille, Hibernation, Redémarrer et Éteindre sont refusés tant que vous ne les autorisez pas ci-dessous ; Ouvrir l'URL aussi. Ce sont des boutons, jamais des interrupteurs : ni assistant vocal ni « tout éteindre » ne les atteint. Le travail non enregistré sur le PC est perdu au redémarrage ou à l'arrêt. Ne les autorisez jamais sur le PC qui fait tourner Gladys."
+      }
+    },
+    {
+      "key": "allow_power_actions",
+      "type": "boolean",
+      "label": {
+        "en": "Allow sleep, hibernate, restart and shut down",
+        "fr": "Autoriser la veille, l'hibernation, le redémarrage et l'arrêt"
       },
       "required": false,
-      "default": 300,
-      "min": 60,
-      "max": 3600
+      "default": false
+    },
+    {
+      "key": "allow_open_url",
+      "type": "boolean",
+      "label": { "en": "Allow opening the URL", "fr": "Autoriser l'ouverture de l'URL" },
+      "description": {
+        "en": "The Open the URL button opens the page below in the default browser of the PC.",
+        "fr": "Le bouton Ouvrir l'URL ouvre la page ci-dessous dans le navigateur par défaut du PC."
+      },
+      "required": false,
+      "default": false
+    },
+    {
+      "key": "open_url",
+      "type": "string",
+      "label": { "en": "URL to open (optional)", "fr": "URL à ouvrir (facultatif)" },
+      "description": {
+        "en": "An http or https address only (never a file nor a program), without a user name nor password.",
+        "fr": "Une adresse http ou https seulement (jamais un fichier ni un programme), sans identifiant ni mot de passe."
+      },
+      "placeholder": {
+        "en": "e.g. https://gladys.local/dashboard",
+        "fr": "ex. https://gladys.local/dashboard"
+      },
+      "required": false
     }
   ],
   "actions": [
     {
-      "key": "test_weather",
-      "label": { "en": "Test the weather provider", "fr": "Tester le fournisseur météo" },
+      "key": "test_connection",
+      "label": { "en": "Test the connection", "fr": "Tester la connexion" },
+      "description": {
+        "en": "Connects to System Bridge (even after a refused token) and reads the PC.",
+        "fr": "Se connecte à System Bridge (même après un jeton refusé) et lit le PC."
+      },
       "timeout_seconds": 30
-    },
-    {
-      "key": "identify",
-      "label": { "en": "Identify a device", "fr": "Identifier un appareil" },
-      "fields": [
-        {
-          "key": "device",
-          "type": "select",
-          "source": "devices",
-          "label": { "en": "Device", "fr": "Appareil" },
-          "required": true
-        }
-      ]
-    }
-  ],
-  "scene_triggers": [
-    {
-      "key": "motion_detected",
-      "label": { "en": "Motion detected", "fr": "Mouvement détecté" },
-      "description": {
-        "en": "A demo motion sensor saw a person or an animal move.",
-        "fr": "Un détecteur de démonstration a vu bouger une personne ou un animal."
-      },
-      "fields": [
-        {
-          "key": "device",
-          "type": "select",
-          "source": "devices",
-          "label": { "en": "Sensor", "fr": "Détecteur" }
-        },
-        {
-          "key": "target",
-          "type": "multi_select",
-          "label": { "en": "What moved", "fr": "Ce qui a bougé" },
-          "options": [
-            { "value": "person", "label": { "en": "Person", "fr": "Personne" } },
-            { "value": "animal", "label": { "en": "Animal", "fr": "Animal" } }
-          ]
-        }
-      ],
-      "variables": [
-        {
-          "key": "target",
-          "type": "string",
-          "label": { "en": "What moved", "fr": "Ce qui a bougé" }
-        }
-      ]
-    }
-  ],
-  "scene_actions": [
-    {
-      "key": "identify_device",
-      "label": { "en": "Identify a device", "fr": "Identifier un appareil" },
-      "description": {
-        "en": "Make a device signal itself (the demo light blinks).",
-        "fr": "Fait se signaler un appareil (la lampe de démonstration clignote)."
-      },
-      "timeout_seconds": 15,
-      "fields": [
-        {
-          "key": "device",
-          "type": "select",
-          "source": "devices",
-          "label": { "en": "Device", "fr": "Appareil" },
-          "required": true
-        }
-      ],
-      "outputs": [
-        {
-          "key": "signalled",
-          "type": "boolean",
-          "label": { "en": "Device signalled", "fr": "Appareil signalé" }
-        }
-      ]
-    }
-  ],
-  "widgets": [
-    {
-      "key": "demo_status",
-      "label": { "en": "Demo status", "fr": "État de la démo" },
-      "description": {
-        "en": "Live temperature and plug power, plug connection and observed location.",
-        "fr": "Température et puissance en direct, connexion de la prise, position observée."
-      },
-      "icon": "activity",
-      "action_timeout_seconds": 15
     }
   ]
 }
