@@ -51,16 +51,21 @@ machine (il survit à un changement de nom ou d'adresse IP) :
 | Lock, Sleep, Hibernate, Restart, Shut down, Open the URL | boutons                                                                      |
 
 Un disque ou un GPU vu une fois reste sur l'appareil (sans valeur tant qu'il
-est absent), pour ne jamais perdre son historique.
+est absent), pour ne jamais perdre son historique. Sous Windows, seules les
+cartes NVIDIA donnent une température de GPU (pour les autres, Windows donne
+une zone de la carte mère, pas celle de la carte graphique).
 
 Le PC est lu au rythme choisi dans **Rafraîchissement** (toutes les minutes par
 défaut). Quand il ne répond pas, Gladys réessaie 30 secondes à 5 minutes plus
-tard, jamais plus vite que ce rythme.
+tard, jamais plus vite que ce rythme. Le bouton Découverte montre la dernière
+lecture quand elle est plus récente que ce rythme.
 
 ## Boutons et sécurité
 
 - **Verrouiller** (Lock) verrouille la session ; il est toujours permis (il
-  protège le PC).
+  protège le PC), mais seulement tant que Gladys est connecté à ce PC (il
+  n'ouvre jamais de connexion à lui seul, il est donc refusé quand System
+  Bridge a demandé à Gladys de ralentir).
 - **Veille, Hibernation, Redémarrer, Éteindre** sont refusés tant que vous ne
   cochez pas **Autoriser la veille, l'hibernation, le redémarrage et l'arrêt**.
   Le travail non enregistré sur le PC est perdu au redémarrage ou à l'arrêt. Ne

@@ -46,10 +46,37 @@ export class BridgeClient {
     this.pending = new Map();
     /** The readings waiting for their module updates. */
     this.collections = new Set();
+    /** Messages received while nothing waited for one (see LIMITS.UNSOLICITED_*). */
+    this.unsolicited = { messages: 0, bytes: 0 };
   }
 
   get connected() {
     return Boolean(this.socket?.open);
+  }
+
+  /** The socket open now, or null: a verified command is written on it and nowhere else. */
+  currentSocket() {
+    return this.socket?.open ? this.socket : null;
+  }
+
+  /** Open the socket, or fail at `limit` (the caller's own deadline, even when sharing an opening). */
+  async #openBy(limit) {
+    if (this.socket?.open && !this.disposed) return this.socket;
+    const opening = this.ensureOpen(limit);
+    if (limit === undefined) return opening;
+    let handle = null;
+    const late = new Promise((_, reject) => {
+      handle = this.timers.setTimeout(
+        () => reject(new BridgeError(CODES.TIMEOUT, 'no connection in time', { sent: false })),
+        Math.max(0, limit - this.now()),
+      );
+    });
+    opening.catch(() => {}); // a late failure of a shared opening is the opener's business
+    try {
+      return await Promise.race([opening, late]);
+    } finally {
+      this.timers.clearTimeout(handle);
+    }
   }
 
   /** Open the socket if needed (shared by concurrent callers). */
@@ -105,12 +132,28 @@ export class BridgeClient {
    * Send one request; resolves with the answer of type `answer` (same id),
    * rejects with a BridgeError: BAD_TOKEN, REFUSED (an ERROR answer), TIMEOUT
    * or CLOSED (`sent` tells whether the request was written).
+   *
+   * `sendBy`: nothing is written after this instant (an opening that ends
+   * later fails, sent: false). `socket`: written on this socket only, never
+   * on a new connection (a command verified on it).
    */
-  async request(event, data, answer, { deadline, onSent } = {}) {
-    const socket = await this.ensureOpen(deadline);
+  async request(event, data, answer, { deadline, sendBy, socket: only, onSent } = {}) {
+    let socket;
+    if (only !== undefined) {
+      if (this.disposed || !only?.open || this.socket !== only) {
+        throw new BridgeError(CODES.CLOSED, 'connection closed', { sent: false });
+      }
+      socket = only;
+    } else {
+      socket = await this.#openBy(sendBy ?? deadline);
+    }
+    if (sendBy !== undefined && this.now() > sendBy) {
+      throw new BridgeError(CODES.TIMEOUT, 'too late to send', { sent: false });
+    }
     if (this.pending.size >= LIMITS.PENDING) {
       throw new BridgeError(CODES.BUSY, 'too many requests waiting');
     }
+    this.unsolicited = { messages: 0, bytes: 0 };
     const id = randomUUID();
     const message = JSON.stringify({ token: this.token, id, event, data });
     return new Promise((resolve, reject) => {
@@ -172,18 +215,31 @@ export class BridgeClient {
       this.collections.delete(collection);
     }
     if (collection.failed) throw collection.failed;
-    if (!collection.data.system) {
+    if (!('system' in collection.data)) {
       throw new BridgeError(CODES.TIMEOUT, 'no system data in time');
     }
     return collection.data;
   }
 
   /** Send a command; resolves once System Bridge answered `answer`. */
-  command(event, data, answer, { deadline, onSent } = {}) {
-    return this.request(event, data, answer, { deadline, onSent });
+  command(event, data, answer, options = {}) {
+    return this.request(event, data, answer, options);
   }
 
   #message(text) {
+    if (this.pending.size === 0 && this.collections.size === 0) {
+      // Nothing asked: a server that floods is cut off (the next reading reconnects).
+      this.unsolicited.messages += 1;
+      this.unsolicited.bytes += text.length;
+      if (
+        this.unsolicited.messages > LIMITS.UNSOLICITED_MESSAGES ||
+        this.unsolicited.bytes > LIMITS.UNSOLICITED_BYTES
+      ) {
+        this.unsolicited = { messages: 0, bytes: 0 };
+        this.disconnect();
+        return;
+      }
+    }
     let message;
     try {
       message = JSON.parse(text);
@@ -193,18 +249,23 @@ export class BridgeClient {
     if (!message || typeof message !== 'object' || Array.isArray(message)) return;
     const type = typeof message.type === 'string' ? message.type : null;
     const id = typeof message.id === 'string' ? message.id : null;
-    const subtype = typeof message.subtype === 'string' ? message.subtype : null;
+    // Only a plain constant name is kept (it ends up in a status and an error).
+    const subtype =
+      typeof message.subtype === 'string' && /^[A-Z_]{1,40}$/.test(message.subtype)
+        ? message.subtype
+        : null;
     if (type === 'DATA_UPDATE') {
       const module = typeof message.module === 'string' ? message.module : null;
       for (const collection of this.collections) {
         if (!module || !collection.modules.has(module)) continue;
-        if (message.data === null || typeof message.data !== 'object') continue;
+        // null: the PC has nothing for this module (a desktop without GPU): received all the same.
+        if (message.data !== null && typeof message.data !== 'object') continue;
         collection.data[module] = message.data;
         if (Object.keys(collection.data).length >= collection.modules.size) collection.done();
       }
     }
     const entry = id ? this.pending.get(id) : undefined;
-    if (type === 'ERROR' && subtype && TOKEN_SUBTYPES.includes(subtype)) {
+    if (type === 'ERROR' && TOKEN_SUBTYPES.includes(subtype)) {
       // The token is refused: every request waiting fails the same way.
       this.#rejectAll(new BridgeError(CODES.BAD_TOKEN, 'token refused', { subtype }));
       return;
@@ -214,8 +275,8 @@ export class BridgeClient {
       entry.resolve({ type, subtype });
     } else if (type === 'ERROR') {
       entry.reject(
-        new BridgeError(CODES.REFUSED, `refused (${(subtype ?? 'error').slice(0, 40)})`, {
-          subtype: subtype?.slice(0, 40),
+        new BridgeError(CODES.REFUSED, `refused (${subtype ?? 'error'})`, {
+          subtype: subtype ?? undefined,
           sent: true,
         }),
       );

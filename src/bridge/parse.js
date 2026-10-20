@@ -6,6 +6,7 @@
 // Bridge 5): snake_case keys, nullable numbers.
 // -----------------------------------------------------------------------------
 
+import { createHash } from 'node:crypto';
 import { LIMITS } from '../constants.js';
 import { BridgeError, CODES } from './errors.js';
 
@@ -66,6 +67,26 @@ export function slug(value, max = 32) {
     .replace(/-+$/, '');
 }
 
+/** 6 hex digits of SHA-1: tells apart two values whose slugs are equal. */
+const shortHash = (value) => createHash('sha1').update(value).digest('hex').slice(0, 6);
+
+/**
+ * The key of a disk, one per mount point (injective): a Windows drive gives
+ * its letter (`c`), `/` gives `root`, a path of lowercase letters and digits
+ * its slug (`/mnt/data` -> `mnt-data`); any other mount point (`/mnt-data`,
+ * `/root`, spaces, capitals) its slug, `_` and a short hash of the exact
+ * mount point (`_` never appears in the simple keys).
+ */
+export function diskKey(mount) {
+  const drive = /^([A-Za-z]):\\?$/.exec(mount);
+  if (drive) return drive[1].toLowerCase();
+  if (mount === '/') return 'root';
+  if (/^(\/[a-z0-9]+)+$/.test(mount) && mount !== '/root' && mount.length <= 33) {
+    return slug(mount);
+  }
+  return `${slug(mount, 20) || 'disk'}_${shortHash(mount)}`;
+}
+
 /** The machine id System Bridge gives (stable): the external id of the PC. */
 export function machineId(value) {
   if (typeof value !== 'string') return null;
@@ -86,7 +107,7 @@ function partitions(disks) {
       if (SKIPPED_FILESYSTEMS.has(String(p.filesystem_type ?? '').toLowerCase())) continue;
       const percent = num(object(p.usage).percent, 0, 100);
       if (percent === null) continue;
-      const key = slug(mount) || 'root';
+      const key = diskKey(mount);
       if (keys.has(key)) continue; // the first one keeps the key
       keys.add(key);
       out.push({ key, label: mount.slice(0, 64), percent });
@@ -95,20 +116,32 @@ function partitions(disks) {
   return out;
 }
 
-function gpus(value) {
+/** The key of a GPU: its id, never its position (a GPU without id is left out). */
+export function gpuKey(id) {
+  if (typeof id !== 'string' || !id.trim()) return null;
+  const value = id.trim().slice(0, 256);
+  if (/^[A-Za-z0-9-]{1,32}$/.test(value)) return value.toLowerCase();
+  return `${slug(value, 20) || 'gpu'}_${shortHash(value)}`;
+}
+
+function gpus(value, platform) {
   const out = [];
   const keys = new Set();
   for (const [index, gpu] of list(value).entries()) {
     if (out.length >= LIMITS.GPUS) break;
     const g = object(gpu);
-    const key = slug(g.id) || slug(g.name) || String(index);
-    if (keys.has(key)) continue;
+    const key = gpuKey(g.id);
+    if (!key || keys.has(key)) continue;
     keys.add(key);
+    const name = label(g.name) ?? `GPU ${index + 1}`;
+    // Under Windows, the "temperature" of a GPU other than NVIDIA is an ACPI
+    // thermal zone of the board (the CPU's): not published as the GPU's.
+    const trusted = platform !== 'windows' || /nvidia/i.test(name);
     out.push({
       key,
-      name: label(g.name) ?? `GPU ${index + 1}`,
+      name,
       load: num(g.core_load, 0, 100),
-      temperature: num(g.temperature, -50, 150),
+      temperature: trusted ? num(g.temperature, -50, 150) : null,
     });
   }
   return out;
@@ -152,6 +185,6 @@ export function parseSnapshot(modules) {
     battery: batteryPercent,
     batteryCharging: batteryPercent === null ? null : bool(battery.is_charging),
     partitions: partitions(modules.disks),
-    gpus: gpus(modules.gpus),
+    gpus: gpus(modules.gpus, label(system.platform, 32)?.toLowerCase()),
   };
 }

@@ -30,6 +30,23 @@ up to date at the end of every milestone.
       e2e test in a container. The store validator
       (`npx github:GladysAssistant/integration-store .`) could not be run by
       the development agent.
+- [x] **Review 1 corrections** (2026-10-20): frames bounded in count (1024
+      per message, no empty non-final continuation), one pong waiting and 100
+      pings in a row at most, write queue checked, opcodes refused from the
+      header, linear byte queue, 101 checked (Connection, no subprotocol),
+      1-byte close refused, unsolicited messages capped (50 / 8 MiB); a
+      command never written after its 3.5 s (shared opening raced against
+      its own deadline), a verified command written only on the socket of
+      its fresh reading; permissions checked against the configuration in
+      use AND the last saved one, a save meanwhile cancels the command; Lock
+      only to the PC read last, on the open connection (never during a
+      pause); 429 / 503 met by a command or the reading after it pauses
+      everything; one reading after commands, Discovery and `connected`
+      reuse a reading younger than the interval; the epoch checked in
+      connect(); a module answered with null counts; error subtypes
+      sanitized; injective disk and GPU keys; non-NVIDIA GPU temperature
+      under Windows dropped; `npm audit fix` (dev). The hostile scenarios of
+      the review are tests (`test/hostile.test.js`, `test/app.test.js`).
 - [ ] **Milestone 2 — real PC** (a tester with System Bridge 5 on Windows and
       Linux): record real answers as fixtures (token removed), fix what
       differs. To check first:
@@ -40,6 +57,9 @@ up to date at the end of every milestone.
   - the size of `disks` and `gpus` on a Linux box with many mounts (snap,
     docker, flatpak): the filters of `src/bridge/parse.js`;
   - `cpu.temperature` on Windows (needs a sensor provider?);
+  - the GPU ids under Windows: do they switch between `nvidia-0` and
+    `VideoController1` (two devices' features for one card)? Is the
+    temperature of an Intel / AMD GPU really an ACPI zone (dropped today)?;
   - the answer of a power command before the PC goes down: does
     `POWER_SHUTTINGDOWN` always arrive (1 s delay in the server)?;
   - System Bridge closing an idle WebSocket: is a ping needed between
@@ -70,9 +90,18 @@ up to date at the end of every milestone.
   the refresh interval. Polling with GET_DATA rather than
   REGISTER_DATA_LISTENER: the pace is ours, not the server's broadcast.
 - **The machine uuid of System Bridge is the external id** (lowercased,
-  `[a-z0-9._-]`, 64 at most); without it the reading is refused. Disks are
-  keyed by their mount point (`disk_c`, `disk_root`, `disk_mnt-data`), GPUs by
-  their id; two mount points giving the same key: the first one keeps it.
+  `[a-z0-9._-]`, 64 at most); without it the reading is refused.
+- **Disk keys are injective**: a Windows drive gives its letter (`disk_c`),
+  `/` gives `root`, a path of lowercase letters and digits its slug
+  (`/mnt/data` -> `mnt-data`); any other mount point (`/root`, `/mnt-data`,
+  spaces, capitals, a trailing slash) gets its slug, `_` and 6 hex digits of
+  the SHA-1 of the exact mount point (`_` never appears in the simple keys).
+- **GPU keys come from the GPU id only** (`[A-Za-z0-9-]`, 32 at most: the id
+  lowercased; else slug, `_` and a hash); a GPU without id is left out, never
+  keyed by its position. Under Windows the temperature of a GPU whose name is
+  not NVIDIA is not published: Windows reports an ACPI thermal zone (the CPU
+  side) for it. Whether the ids are stable under Windows is to check on a
+  real PC (milestone 2).
 - **No percent unit for CPU, memory, disk and GPU load**: no core category
   lists a percent for them (`DEVICE_FEATURE_UNITS_BY_CATEGORY`):
   `unknown`/`unknown` without unit, the name says "(%)" (like gladys-portainer).
@@ -83,7 +112,9 @@ up to date at the end of every milestone.
   only `unknown`/`binary`, never a switch.
 - **Buttons only.** Lock is protective: always allowed (no option), never
   blocked by another command, and it cancels an "open the URL" still being
-  checked. Sleep, hibernate, restart and shut down share one option
+  checked. It goes only to the PC read last (same machine id) and only on the
+  connection open now: it never opens one (so never during a 429 / 503 pause,
+  and not between a reconnection to Gladys and the next reading). Sleep, hibernate, restart and shut down share one option
   (`allow_power_actions`, off); open the URL has its own (`allow_open_url`,
   off) and a fixed URL from the configuration (http or https, no credentials,
   2000 characters at most): never a value from a scene, never a path (on
@@ -93,10 +124,21 @@ up to date at the end of every milestone.
   with a path, NOTIFICATION, MEDIA_CONTROL, UPDATE_SETTINGS,
   APPLICATION_UPDATE, EXIT_APPLICATION, GET_FILE(S).
 - **Commands**: the value must be 1, '1' or true; the PC is read again
-  (`system` only) and its uuid compared before a power or open command; the
-  option is checked on arrival and just before sending; one such command at a
-  time; nothing sent when less than 0.5 s is left of the 3.5 s budget; Gladys
-  answered at 4.3 s at most. A command written but not confirmed is "sent,
+  (`system` only) and its uuid compared before a power or open command, and
+  the command is written on that very connection only; the option is checked
+  on arrival and just before sending, in the configuration in use AND the
+  last one saved (`start()` records it before queueing), and a configuration
+  saved meanwhile cancels the command; one such command at a time; nothing
+  written after 3.5 s (`sendBy`, also when a connection opening is shared
+  with a reading); Gladys answered at 4.3 s at most.
+- **WebSocket limits** (review 1): 4 MiB and 1024 frames per message, no
+  empty non-final continuation, one pong waiting, 100 pings in a row, a
+  pong never written past 64 KiB waiting in the socket, 50 messages or
+  8 MiB received while nothing was asked (then the socket is closed and the
+  next reading reconnects).
+- **Readings**: never faster than the refresh; the reading after commands is
+  coalesced (one waiting at most), Discovery and a reconnection to Gladys
+  reuse a reading younger than the interval. A command written but not confirmed is "sent,
   without confirmation", never "not sent"; an ERROR answer is "refused".
 - **A refused token** (BAD_TOKEN, BAD_API_KEY, MISSING_TOKEN): every path
   stops; an HMAC (salt of `/data`) of address + token and the time of the next

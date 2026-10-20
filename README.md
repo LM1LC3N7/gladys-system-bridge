@@ -37,17 +37,20 @@ Gladys ⇄ SDK ⇄ src/app.js (SystemBridgeApp)
   token is kept in `/data` and the same values are tried again alone once
   after 6 h (saved configuration or test button: at once). HTTP 429 / 503 on
   the upgrade pauses every path (Retry-After, 1 min to 6 h, kept in `/data`).
-- **Limits**: a message is read up to 4 MiB (closed before buffering more),
-  frames checked (unmasked, small control frames, valid UTF-8), the chunks
-  copied once; every value is type- and range-checked, lists are cut (12
-  disks, 4 GPUs).
+- **Limits**: a message is read up to 4 MiB and 1024 frames (closed before
+  buffering more), frames checked (unmasked, known opcodes from the header,
+  small control frames, valid UTF-8), one pong waiting at most, the byte
+  queue parsed in linear time, unsolicited messages capped; every value is
+  type- and range-checked, lists are cut (12 disks, 4 GPUs).
 - **Commands**: push buttons, never switches. Lock is always allowed, never
-  waits, and cancels an "open the URL" not sent yet. Sleep, hibernate,
-  restart, shut down (`allow_power_actions`) and open the URL
-  (`allow_open_url` + an http(s) URL) are off by default, checked on arrival
-  and just before sending, one at a time, after a fresh read of the PC (same
-  machine id); nothing sent past 3.5 s, Gladys answered at 4.3 s at most
-  ("sent, without confirmation" when System Bridge did not answer).
+  waits, cancels an "open the URL" not sent yet, and goes only to the PC read
+  last on the connection open now. Sleep, hibernate, restart, shut down
+  (`allow_power_actions`) and open the URL (`allow_open_url` + an http(s)
+  URL) are off by default, checked on arrival and just before sending against
+  the configuration in use and the last one saved, one at a time, after a
+  fresh read of the PC (same machine id) and on that connection only;
+  nothing written past 3.5 s, Gladys answered at 4.3 s at most ("sent,
+  without confirmation" when System Bridge did not answer).
 
 ## Development
 

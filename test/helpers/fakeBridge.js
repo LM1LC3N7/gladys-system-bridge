@@ -124,6 +124,14 @@ export async function startFakeBridge({
     res.writeHead(404).end();
   });
   server.on('upgrade', (req, socket) => {
+    socket.on('error', () => {});
+    if (fake.handshakeDelayMs) {
+      setTimeout(() => upgrade(req, socket), fake.handshakeDelayMs);
+    } else upgrade(req, socket);
+  });
+
+  function upgrade(req, socket) {
+    if (socket.destroyed) return;
     if (fake.handshake === 'http429') {
       socket.end('HTTP/1.1 429 Too Many Requests\r\nRetry-After: 120\r\nContent-Length: 0\r\n\r\n');
       return;
@@ -133,8 +141,10 @@ export async function startFakeBridge({
       fake.handshake === 'badAccept'
         ? 'nope'
         : createHash('sha1').update(`${key}${GUID}`).digest('base64');
+    const connection = fake.handshake === 'noConnection' ? '' : 'Connection: Upgrade\r\n';
+    const protocol = fake.handshake === 'protocol' ? 'Sec-WebSocket-Protocol: chat\r\n' : '';
     socket.write(
-      `HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`,
+      `HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\n${connection}${protocol}Sec-WebSocket-Accept: ${accept}\r\n\r\n`,
     );
     fake.sockets.add(socket);
     socket.on('close', () => fake.sockets.delete(socket));
@@ -171,7 +181,7 @@ export async function startFakeBridge({
         if (opcode === 0x1) handle(socket, payload.toString('utf8'));
       }
     });
-  });
+  }
 
   const send = (socket, message) => socket.write(textFrame(JSON.stringify(message)));
 
@@ -181,6 +191,7 @@ export async function startFakeBridge({
       event: message.event,
       data: message.data,
       tokenOk: message.token === fake.token,
+      at: Date.now(),
     });
     if (message.token !== fake.token) {
       send(socket, {

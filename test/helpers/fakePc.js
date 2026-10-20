@@ -28,16 +28,32 @@ export function createFakePc({ modules = windowsModules() } = {}) {
     const client = {
       options,
       disposed: false,
+      /** The connection: opened by a reading that works, closed by disconnect(). */
+      socket: null,
+      currentSocket() {
+        return client.socket?.open ? client.socket : null;
+      },
       async getData(names) {
         pc.reads.push([...names]);
         await pc.onRead?.(names);
         if (client.disposed) throw new BridgeError(CODES.CLOSED, 'configuration changed');
         if (pc.fail) throw pc.fail;
+        if (!client.socket?.open) client.socket = { open: true };
+        // Runs once this reading is over, before its caller goes on.
+        if (pc.afterRead) queueMicrotask(() => pc.afterRead(names, client));
         const out = {};
         for (const name of names) if (name in pc.modules) out[name] = pc.modules[name];
         return out;
       },
-      async command(event, data, answer) {
+      async command(event, data, answer, options = {}) {
+        pc.lastOptions = options;
+        if (pc.commandFail) throw pc.commandFail;
+        if (
+          options.socket !== undefined &&
+          (options.socket !== client.socket || !options.socket?.open)
+        ) {
+          throw new BridgeError(CODES.CLOSED, 'closed', { sent: false });
+        }
         if (pc.commands === 'notSent')
           throw new BridgeError(CODES.CLOSED, 'closed', { sent: false });
         pc.sent.push({ event, data });
@@ -50,9 +66,13 @@ export function createFakePc({ modules = windowsModules() } = {}) {
         if (pc.commands === 'badToken') throw new BridgeError(CODES.BAD_TOKEN, 'token refused');
         return { type: answer };
       },
-      disconnect() {},
+      disconnect() {
+        if (client.socket) client.socket.open = false;
+        client.socket = null;
+      },
       dispose() {
         client.disposed = true;
+        client.disconnect();
       },
     };
     pc.clients.push(client);

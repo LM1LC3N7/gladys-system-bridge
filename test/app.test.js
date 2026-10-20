@@ -415,13 +415,165 @@ test('values: never NaN, undefined nor a string', async () => {
   );
 });
 
-test('Discovery button reads again; a created device gets its states at once', async () => {
+test('Discovery button: never a reading faster than the interval; a created device gets its states', async () => {
   const pc = createFakePc();
-  const { gladys } = await setup({ pc, created: [] });
+  const { gladys, clock } = await setup({ pc, created: [] });
   assert.equal(gladys.fake.states.length, 0, 'nothing created yet');
   const reads = pc.reads.length;
+  for (let i = 0; i < 5; i += 1) await gladys.fake.scanRequest();
+  assert.equal(pc.reads.length, reads, 'the reading of the start is recent: published as is');
+  assert.equal(gladys.fake.discoveredDevices.length, 1);
+  clock.now += MINUTE;
   await gladys.fake.scanRequest();
   assert.equal(pc.reads.length, reads + 1);
   await gladys.fake.deviceCreated(gladys.fake.discoveredDevices[0]);
   assert.equal(state(gladys, 'online'), 1);
+});
+
+// --- Review 1 ----------------------------------------------------------------
+
+test('power turned off and saved while a start still reads the PC: refused', async () => {
+  const pc = createFakePc();
+  const { gladys, app } = await setup({ pc, config: { allow_power_actions: true } });
+  let release;
+  pc.onRead = (names) =>
+    names.length > 1
+      ? new Promise((resolve) => {
+          release = resolve;
+        })
+      : undefined;
+  const restart = app.start(app.rawConfig, { force: true });
+  await new Promise((resolve) => setImmediate(resolve));
+  const saved = gladys.fake.configUpdated({ ...BASE_CONFIG, allow_power_actions: false });
+  await new Promise((resolve) => setImmediate(resolve));
+  const ack = await press(gladys, 'shutdown');
+  assert.match(ack.error, /are off/);
+  pc.onRead = null;
+  release();
+  await restart;
+  await saved;
+  assert.deepEqual(pc.sent, []);
+});
+
+test('a configuration saved between the check and the send: nothing sent', async () => {
+  const pc = createFakePc();
+  const { gladys, app } = await setup({ pc, config: { allow_power_actions: true } });
+  let restart;
+  pc.onRead = (names) => {
+    // The user saves (same values) while the PC is read again for the command.
+    if (names.length === 1) restart = app.start({ ...BASE_CONFIG, allow_power_actions: true });
+  };
+  const ack = await press(gladys, 'sleep');
+  assert.match(ack.error, /nothing was sent/);
+  assert.deepEqual(pc.sent, []);
+  pc.onRead = null;
+  await restart;
+});
+
+test('the URL opened is the one of the last configuration saved', async () => {
+  const pc = createFakePc();
+  const config = { allow_open_url: true, open_url: 'https://old.example/' };
+  const { gladys, app } = await setup({ pc, config });
+  let release;
+  pc.onRead = (names) =>
+    names.length > 1
+      ? new Promise((resolve) => {
+          release = resolve;
+        })
+      : undefined;
+  const restart = app.start(app.rawConfig, { force: true });
+  await new Promise((resolve) => setImmediate(resolve));
+  const saved = gladys.fake.configUpdated({
+    ...BASE_CONFIG,
+    ...config,
+    open_url: 'https://new.example/',
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  const ack = await press(gladys, 'open_url');
+  assert.equal(ack.success, false);
+  pc.onRead = null;
+  release();
+  await restart;
+  await saved;
+  assert.deepEqual(pc.sent, []);
+  assert.equal((await press(gladys, 'open_url')).success, true);
+  assert.deepEqual(pc.sent, [{ event: 'OPEN', data: { url: 'https://new.example/' } }]);
+});
+
+test('the connection closed between the check and the send: a verified command is not sent', async () => {
+  const pc = createFakePc();
+  const { gladys } = await setup({ pc, config: { allow_power_actions: true } });
+  pc.afterRead = (names, client) => {
+    // The verification reads on the current socket, which then drops.
+    if (names.length === 1) client.disconnect();
+  };
+  const ack = await press(gladys, 'restart');
+  assert.match(ack.error, /nothing was sent/);
+  assert.deepEqual(pc.sent, []);
+});
+
+test('a verified command carries its sendBy and its socket', async () => {
+  const pc = createFakePc();
+  const { gladys, clock } = await setup({ pc, config: { allow_power_actions: true } });
+  const received = clock.now;
+  await press(gladys, 'sleep');
+  assert.equal(pc.lastOptions.sendBy, received + COMMAND_BUDGET_MS);
+  assert.equal(pc.lastOptions.socket, pc.clients.at(-1).socket);
+});
+
+test('lock during a 429 pause: nothing sent (no new connection)', async () => {
+  const pc = createFakePc();
+  const { gladys, timers, app } = await setup({ pc });
+  pc.fail = new BridgeError(CODES.HTTP, 'HTTP 429', { status: 429, retryAfterMs: 30 * MINUTE });
+  await timers.run();
+  assert.equal(app.paused(), true);
+  const ack = await press(gladys, 'lock');
+  assert.equal(ack.success, false);
+  assert.deepEqual(pc.sent, []);
+});
+
+test('lock: only the PC read last; a 429 met by a command pauses everything', async () => {
+  const other = buildPcDevice(
+    ids,
+    parseSnapshot(windowsModules({ system: { ...windowsModules().system, uuid: 'old-pc-0001' } })),
+  );
+  const pc = createFakePc();
+  const { gladys, app } = await setup({ pc });
+  const ack = await gladys.fake.setValue(
+    other,
+    other.features.find((f) => f.external_id.endsWith(':lock')),
+    1,
+  );
+  assert.match(ack.error, /Another PC/);
+  assert.deepEqual(pc.sent, []);
+  pc.commandFail = new BridgeError(CODES.HTTP, 'HTTP 503', { status: 503 });
+  await press(gladys, 'lock');
+  assert.equal(app.paused(), true);
+  assert.match(gladys.fake.connectionStatus.message.en, /slow down/);
+});
+
+test('ten locks: one reading afterwards, not ten', async () => {
+  const pc = createFakePc();
+  const { gladys, timers } = await setup({ pc });
+  for (let i = 0; i < 10; i += 1) assert.equal((await press(gladys, 'lock')).success, true);
+  const before = pc.reads.length;
+  await timers.run((ms) => ms === INTERVALS.AFTER_COMMAND_MS);
+  assert.equal(pc.reads.length - before, 1);
+});
+
+test('a reconnection to Gladys right after a reading: no new reading, the pace kept', async () => {
+  const pc = createFakePc();
+  const { gladys, timers, clock } = await setup({ pc });
+  const before = pc.reads.length;
+  clock.now += 20_000;
+  await gladys.disconnect();
+  const statuses = gladys.fake.connectionStatuses.length;
+  await gladys.connect();
+  assert.equal(pc.reads.length, before);
+  assert.ok(gladys.fake.connectionStatuses.length > statuses, 'status republished');
+  assert.equal(gladys.fake.discoveredDevices.length, 1);
+  assert.deepEqual(timers.delays(), [MINUTE - 20_000]);
+  clock.now += 40_000;
+  await timers.run();
+  assert.equal(pc.reads.length, before + 1);
 });

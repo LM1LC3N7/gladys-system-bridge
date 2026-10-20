@@ -32,4 +32,39 @@ the notes of the version's GitHub Release.
   answer, never faster than the refresh.
 - Button "Test the connection".
 
+### Security
+
+- WebSocket frames bounded in count as well as in size: a message in more
+  than 1024 frames or an empty non-final continuation closes the connection;
+  one pong waiting at most, 100 pings in a row at most, nothing written to a
+  peer that does not read; binary, reserved and unknown opcodes refused from
+  the header; the byte queue parsed in linear time; a 101 without
+  `Connection: Upgrade` or with a subprotocol refused; a 1-byte close frame
+  refused; messages nobody asked for (50, or 8 MiB) close the socket.
+- A command is never written later than 3.5 s after it arrived, even when the
+  connection opens later (a shared opening included); a verified command is
+  written only on the connection of its fresh reading.
+- The permissions are checked against the configuration in use and the last
+  one saved: a command arriving while a start still reads the PC follows the
+  saved choice; a configuration saved meanwhile cancels the command, and the
+  URL opened is the saved one.
+- Lock goes only to the PC read last (same machine id), on the connection
+  open now: never a new connection, so never during a 429 / 503 pause. A
+  429 / 503 met by a command or the reading after it pauses every path.
+- An error subtype from System Bridge is shown only when it is a plain
+  constant name.
+
+### Changed
+
+- Never a reading faster than the refresh: several commands give one reading
+  a few seconds later; Discovery and a reconnection to Gladys right after a
+  reading publish it as is and keep the pace.
+- A module answered with no data (a desktop without GPU) no longer costs a
+  5 s wait per reading.
+- Disk keys are unique per mount point (`/` is `root`, `/mnt/data` is
+  `mnt-data`, any other mount point gets a short hash: `/root`,
+  `/mnt-data`...); a GPU is keyed by its id only (none: left out). Under
+  Windows, the temperature of a GPU other than NVIDIA (an ACPI zone of the
+  board) is not published.
+
 [Unreleased]: https://github.com/LM1LC3N7/gladys-system-bridge/commits/main

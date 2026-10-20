@@ -13,9 +13,16 @@
 
 import { createHash, randomBytes } from 'node:crypto';
 import { request as httpRequest } from 'node:http';
+import { TIMEOUTS } from '../constants.js';
 import { BridgeError, CODES } from './errors.js';
 
 const GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
+/** Frames one message may be split into (empty continuations included). */
+export const MAX_FRAGMENTS = 1_024;
+/** Pings answered in a row without a message in between: beyond, the connection is closed. */
+export const MAX_PINGS_IN_A_ROW = 100;
+/** A pong is written only while less than this waits in the socket (a peer that does not read). */
+export const MAX_PENDING_WRITE_BYTES = 64 * 1024;
 const OPCODES = Object.freeze({
   CONTINUATION: 0x0,
   TEXT: 0x1,
@@ -104,6 +111,11 @@ export function openWebSocket({
       const status = res.statusCode;
       const wait = retryAfterMs(res.headers['retry-after']);
       res.destroy();
+      if (status === 101) {
+        // A 101 without `Connection: Upgrade`: not a valid upgrade.
+        fail(new BridgeError(CODES.BAD_ANSWER, 'not a valid WebSocket upgrade'));
+        return;
+      }
       fail(
         new BridgeError(CODES.HTTP, `HTTP ${status} instead of a WebSocket`, {
           status,
@@ -117,11 +129,17 @@ export function openWebSocket({
         return;
       }
       const upgrade = String(res.headers.upgrade ?? '').toLowerCase();
+      const connection = String(res.headers.connection ?? '')
+        .toLowerCase()
+        .split(',')
+        .map((token) => token.trim());
       if (
         res.statusCode !== 101 ||
         upgrade !== 'websocket' ||
+        !connection.includes('upgrade') ||
         res.headers['sec-websocket-accept'] !== accept ||
-        res.headers['sec-websocket-extensions'] !== undefined
+        res.headers['sec-websocket-extensions'] !== undefined ||
+        res.headers['sec-websocket-protocol'] !== undefined
       ) {
         socket.destroy();
         fail(new BridgeError(CODES.BAD_ANSWER, 'not a valid WebSocket upgrade'));
@@ -137,10 +155,15 @@ export function openWebSocket({
 
 export class WebSocketConnection {
   #socket;
+  /** The bytes received and not parsed yet: chunks from #head, the first one from #offset. */
   #chunks = [];
+  #head = 0;
+  #offset = 0;
   #buffered = 0;
   #fragments = null;
   #fragmentBytes = 0;
+  #pongPending = false;
+  #pingsInARow = 0;
   #closeTimer = null;
   #finished = false;
   #decoder = new TextDecoder('utf-8', { fatal: true });
@@ -183,7 +206,7 @@ export class WebSocketConnection {
     } catch {
       // The socket is already gone: destroyed below.
     }
-    this.#closeTimer = setTimeout(() => this.#socket.destroy(), 1_000);
+    this.#closeTimer = setTimeout(() => this.#socket.destroy(), TIMEOUTS.CLOSE);
     this.#finish(new BridgeError(CODES.CLOSED, 'connection closed by Gladys'));
   }
 
@@ -192,6 +215,8 @@ export class WebSocketConnection {
     this.#finished = true;
     this.open = false;
     this.#chunks = [];
+    this.#head = 0;
+    this.#offset = 0;
     this.#buffered = 0;
     this.#fragments = null;
     if (!this.#closeTimer) this.#socket.destroy();
@@ -232,22 +257,37 @@ export class WebSocketConnection {
     return Buffer.concat([header, masked]);
   }
 
-  /** Copy the first `n` buffered bytes; `consume` removes them. */
+  /**
+   * Copy the first `n` buffered bytes; `consume` removes them. The queue
+   * advances an index (never Array.shift): bytes dripped one per chunk cost
+   * a constant time each.
+   */
   #read(n, consume) {
     const out = Buffer.allocUnsafe(n);
     let copied = 0;
-    let index = 0;
+    let index = this.#head;
+    let offset = this.#offset;
     while (copied < n) {
       const chunk = this.#chunks[index];
-      const take = Math.min(chunk.length, n - copied);
-      chunk.copy(out, copied, 0, take);
+      const take = Math.min(chunk.length - offset, n - copied);
+      chunk.copy(out, copied, offset, offset + take);
       copied += take;
-      if (consume) {
-        if (take === chunk.length) this.#chunks.shift();
-        else this.#chunks[0] = chunk.subarray(take);
-      } else index += 1;
+      offset += take;
+      if (offset === chunk.length) {
+        index += 1;
+        offset = 0;
+      }
     }
-    if (consume) this.#buffered -= n;
+    if (consume) {
+      this.#buffered -= n;
+      this.#head = index;
+      this.#offset = offset;
+      // Drop the consumed chunks now and then (amortized, linear overall).
+      if (this.#head >= 64 && this.#head * 2 >= this.#chunks.length) {
+        this.#chunks = this.#chunks.slice(this.#head);
+        this.#head = 0;
+      }
+    }
     return out;
   }
 
@@ -261,6 +301,10 @@ export class WebSocketConnection {
       const opcode = head[0] & 0x0f;
       if ((head[0] & 0x70) !== 0) return this.#fail(CODES.BAD_ANSWER, 'reserved bits set');
       if ((head[1] & 0x80) !== 0) return this.#fail(CODES.BAD_ANSWER, 'masked server frame');
+      // Binary, reserved or unknown opcodes are refused from the header, before the payload.
+      if (![0x0, 0x1, 0x8, 0x9, 0xa].includes(opcode)) {
+        return this.#fail(CODES.BAD_ANSWER, 'unexpected frame');
+      }
       let length = head[1] & 0x7f;
       let headerLength = 2;
       if (length === 126) {
@@ -280,6 +324,12 @@ export class WebSocketConnection {
       if (!control && this.#fragmentBytes + length > this.maxMessageBytes) {
         return this.#fail(CODES.TOO_LARGE, 'message too large');
       }
+      if (opcode === OPCODES.CONTINUATION && !fin && length === 0) {
+        return this.#fail(CODES.BAD_ANSWER, 'empty continuation');
+      }
+      if (opcode === OPCODES.CLOSE && length === 1) {
+        return this.#fail(CODES.BAD_ANSWER, 'invalid close frame');
+      }
       if (this.#buffered < headerLength + length) return;
       this.#read(headerLength, true);
       const payload = length > 0 ? this.#read(length, true) : Buffer.alloc(0);
@@ -297,6 +347,9 @@ export class WebSocketConnection {
         return undefined;
       case OPCODES.CONTINUATION:
         if (!this.#fragments) return this.#fail(CODES.BAD_ANSWER, 'unexpected continuation');
+        if (this.#fragments.length >= MAX_FRAGMENTS) {
+          return this.#fail(CODES.TOO_LARGE, 'too many fragments');
+        }
         this.#fragments.push(payload);
         this.#fragmentBytes += payload.length;
         if (fin) {
@@ -307,7 +360,21 @@ export class WebSocketConnection {
         }
         return undefined;
       case OPCODES.PING:
-        if (this.open) this.#socket.write(this.#frame(OPCODES.PONG, payload));
+        // A ping flood, or a peer that does not read what we write: closed.
+        this.#pingsInARow += 1;
+        if (this.#pingsInARow > MAX_PINGS_IN_A_ROW) {
+          return this.#fail(CODES.BAD_ANSWER, 'too many pings');
+        }
+        if ((this.#socket.writableLength ?? 0) > MAX_PENDING_WRITE_BYTES) {
+          return this.#fail(CODES.BAD_ANSWER, 'peer does not read');
+        }
+        // One pong waiting at most: a later ping is answered once it is written.
+        if (this.open && !this.#pongPending) {
+          this.#pongPending = true;
+          this.#socket.write(this.#frame(OPCODES.PONG, payload), () => {
+            this.#pongPending = false;
+          });
+        }
         return undefined;
       case OPCODES.PONG:
         return undefined;
@@ -336,6 +403,7 @@ export class WebSocketConnection {
     } catch {
       return this.#fail(CODES.BAD_ANSWER, 'invalid UTF-8');
     }
+    this.#pingsInARow = 0;
     try {
       this.onMessage?.(text);
     } catch {

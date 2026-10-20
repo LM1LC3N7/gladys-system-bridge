@@ -71,8 +71,13 @@ export const LIMITS = Object.freeze({
    * smaller (no process list).
    */
   MESSAGE_BYTES: 4 * 1024 * 1024,
-  /** Bytes buffered before the HTTP upgrade answer is complete. */
-  HANDSHAKE_BYTES: 16 * 1024,
+  /**
+   * Messages (and bytes) System Bridge may send while no request waits for
+   * an answer: beyond, the socket is closed (the next reading opens a new
+   * one). We never register a data listener, so it should send none.
+   */
+  UNSOLICITED_MESSAGES: 50,
+  UNSOLICITED_BYTES: 8 * 1024 * 1024,
   /** Messages waiting for an answer at once (requests in flight). */
   PENDING: 16,
 });

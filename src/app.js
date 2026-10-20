@@ -92,6 +92,12 @@ export class SystemBridgeApp {
     this.retry = null;
     /** The last snapshot read: kept across a reconnection to Gladys. */
     this.snapshot = null;
+    /** When it was read, for which address and token: { identity, at }. */
+    this.lastRead = null;
+    /** The configuration last given to start() (saved), and its serial number. */
+    this.latestConfig = this.config;
+    this.configSerial = 0;
+    this.refreshPending = false;
     this.reset();
   }
 
@@ -127,6 +133,10 @@ export class SystemBridgeApp {
    * and a pause or a wait is skipped.
    */
   start(rawConfig, { force = false } = {}) {
+    // Known at once, before the queue: a command arriving while an older
+    // start still reads the PC is checked against this configuration too.
+    this.latestConfig = normalizeConfig(rawConfig);
+    this.configSerial += 1;
     return this.enqueue(() => this.run(rawConfig, { force }));
   }
 
@@ -141,6 +151,7 @@ export class SystemBridgeApp {
     this.epoch += 1;
     for (const handle of this.handles) this.timers.clearTimeout(handle);
     this.handles.clear();
+    this.refreshPending = false;
   }
 
   dropClient() {
@@ -175,6 +186,7 @@ export class SystemBridgeApp {
     if (!sameTarget) {
       this.snapshot = null;
       this.retry = null;
+      this.lastRead = null;
     }
     this.reset();
     await this.store.load();
@@ -243,7 +255,37 @@ export class SystemBridgeApp {
       return;
     }
     this.retry = null;
+    // A reconnection to Gladys right after a reading: what was read is
+    // published again, and the next reading keeps its pace.
+    const elapsed = this.lastRead ? this.now() - this.lastRead.at : Infinity;
+    if (
+      !force &&
+      this.snapshot &&
+      this.lastRead?.identity === this.identity() &&
+      elapsed >= 0 &&
+      elapsed < config.refreshMs
+    ) {
+      this.online = true;
+      await this.publishDiscovered();
+      await this.publishStates();
+      await this.publishTransports();
+      await this.setStatus(true, this.okMessage());
+      const epoch = this.epoch;
+      this.schedule(config.refreshMs - elapsed, () => this.readingLoop(generation, epoch));
+      return;
+    }
     await this.connect(generation);
+  }
+
+  okMessage() {
+    const snapshot = this.snapshot;
+    return T.status.ok({
+      hostname: snapshot?.hostname,
+      version: snapshot?.version,
+      cpu: snapshot?.cpuUsage,
+      memory: snapshot?.memoryUsage,
+      openUrlMissing: this.config.allowOpenUrl && !this.config.openUrl,
+    });
   }
 
   schedule(delay, task) {
@@ -272,14 +314,15 @@ export class SystemBridgeApp {
   /** First reading, then the loop. Never throws. */
   async connect(generation) {
     if (!this.client || generation !== this.generation) return;
+    // Another chain started meanwhile (halt() bumped the epoch): this one stops.
+    const epoch = this.epoch;
     try {
       await this.read({ publish: true });
     } catch (err) {
-      await this.failed(err, generation);
+      if (this.current(generation, epoch)) await this.failed(err, generation);
       return;
     }
-    if (generation !== this.generation) return;
-    this.scheduleLoop(generation);
+    if (this.current(generation, epoch)) this.scheduleLoop(generation);
   }
 
   async readingLoop(generation, epoch) {
@@ -302,6 +345,7 @@ export class SystemBridgeApp {
     const snapshot = parseSnapshot(modules);
     const wasOnline = this.online;
     this.snapshot = snapshot;
+    this.lastRead = { identity: this.identity(), at: this.now() };
     this.online = true;
     this.retryDelay = this.minRetry();
     this.retry = null;
@@ -313,16 +357,12 @@ export class SystemBridgeApp {
     this.discoveredKey = discoveredKey;
     await this.publishStates();
     await this.publishTransports();
-    await this.setStatus(
-      true,
-      T.status.ok({
-        hostname: snapshot.hostname,
-        version: snapshot.version,
-        cpu: snapshot.cpuUsage,
-        memory: snapshot.memoryUsage,
-        openUrlMissing: this.config.allowOpenUrl && !this.config.openUrl,
-      }),
-    );
+    await this.setStatus(true, this.okMessage());
+  }
+
+  /** HTTP 429 / 503: whoever met it (a command, a reading after a command), every path pauses. */
+  static isBusy(err) {
+    return err?.code === CODES.HTTP && (err.status === 429 || err.status === 503);
   }
 
   /** A reading failed: refusal, pause, or retry with a growing delay. */
@@ -348,7 +388,7 @@ export class SystemBridgeApp {
     }
     let delay;
     let message;
-    if (err?.code === CODES.HTTP && (err.status === 429 || err.status === 503)) {
+    if (SystemBridgeApp.isBusy(err)) {
       delay = clamp(
         err.retryAfterMs ?? INTERVALS.BUSY_MIN_MS,
         INTERVALS.BUSY_MIN_MS,
@@ -411,7 +451,11 @@ export class SystemBridgeApp {
 
   /** Discovery (scan button): read again when connected, else what is known. */
   async publishDiscovery() {
-    if (this.online && !this.paused() && this.client) {
+    // Never read faster than the interval: a reading younger than it is published as is.
+    const fresh =
+      this.lastRead?.identity === this.identity() &&
+      this.now() - this.lastRead.at < this.config.refreshMs;
+    if (this.online && !this.paused() && this.client && !fresh) {
       const generation = this.generation;
       try {
         await this.read({ publish: true });
@@ -486,17 +530,21 @@ export class SystemBridgeApp {
   //
   //   lock                 protective: always allowed, never waits behind
   //                        another command, and cancels an "open the URL"
-  //                        not sent yet
+  //                        not sent yet; sent only to the PC read last (same
+  //                        machine id), on the connection open now (never a
+  //                        new connection, so never during a pause)
   //   sleep, hibernate,    refused unless `allow_power_actions` (off by
   //   restart, shut down   default)
   //   open the URL         refused unless `allow_open_url` (off by default)
   //                        and an http(s) URL typed in the configuration
   //
   // The permission is checked when the command arrives AND just before it
-  // is sent. One power / open command at a time. Before sending, the PC is
-  // read again (fresh `system` module): unknown, or another machine id at
-  // this address, the command is refused. Gladys waits 5 s: past 3.5 s after
-  // the command arrived, nothing is sent any more; once written, Gladys is
+  // is sent, in the configuration in use and in the last one saved. One
+  // power / open command at a time. Before sending, the PC is read again
+  // (fresh `system` module): unknown, or another machine id at this address,
+  // the command is refused; it is then written on that very connection only.
+  // Gladys waits 5 s: past 3.5 s after the command arrived, nothing is
+  // written any more (a connection opening later fails); once written, Gladys is
   // answered on System Bridge's answer or 4.3 s after the command at the
   // latest ("sent, without confirmation"). The answer to Gladys never waits
   // for the states (read again a few seconds later).
@@ -513,10 +561,18 @@ export class SystemBridgeApp {
     const client = this.client;
     if (!client || this.blocked) throw new Error(T.errors.notConnected);
     const generation = this.generation;
+    const serial = this.configSerial;
     if (command.kind === 'protective') {
-      // Never blocked: cancels an "open the URL" still being checked.
+      // Never waits behind another command, but only to the PC of this
+      // device, read last, on the connection open now (never a new
+      // connection: no request during a pause).
+      if (!this.online || !this.snapshot) throw new Error(T.errors.notConnected);
+      if (this.snapshot.uuid !== parsed.uuid) throw new Error(T.errors.otherPc);
+      const socket = client.currentSocket();
+      if (!socket) throw new Error(T.errors.notConnected);
+      // Cancels an "open the URL" still being checked.
       if (this.inFlight?.kind === 'open') this.inFlight.cancelled = true;
-      return this.send({ client, generation, parsed, command, received, verify: false });
+      return this.send({ client, generation, serial, parsed, command, received, socket });
     }
     if (this.paused()) throw new Error(T.errors.busy);
     if (this.inFlight) throw new Error(T.errors.stillRunning);
@@ -526,6 +582,7 @@ export class SystemBridgeApp {
       return await this.send({
         client,
         generation,
+        serial,
         parsed,
         command,
         received,
@@ -537,55 +594,74 @@ export class SystemBridgeApp {
     }
   }
 
+  /**
+   * The permission, in the configuration in use AND in the last one saved
+   * (a start may still be reading the PC with the older one).
+   */
   checkAllowed(command) {
-    if (command.kind === 'power' && !this.config.allowPower)
-      throw new Error(T.errors.powerDisabled);
-    if (command.kind === 'open') {
-      if (!this.config.allowOpenUrl) throw new Error(T.errors.openDisabled);
-      if (!this.config.openUrl) throw new Error(T.errors.openUrlMissing);
+    for (const config of [this.config, this.latestConfig]) {
+      if (command.kind === 'power' && !config.allowPower) throw new Error(T.errors.powerDisabled);
+      if (command.kind === 'open') {
+        if (!config.allowOpenUrl) throw new Error(T.errors.openDisabled);
+        if (!config.openUrl) throw new Error(T.errors.openUrlMissing);
+      }
+    }
+    if (command.kind === 'open' && this.config.openUrl !== this.latestConfig.openUrl) {
+      throw new Error(T.errors.configChanged);
     }
   }
 
   /** The client, the configuration and the permission are still those of the command. */
-  stillValid({ client, generation, command, context }) {
-    if (client !== this.client || generation !== this.generation || this.blocked) {
+  stillValid({ client, generation, serial, command, context }) {
+    if (
+      client !== this.client ||
+      generation !== this.generation ||
+      serial !== this.configSerial ||
+      this.blocked
+    ) {
       throw new Error(T.errors.configChanged);
     }
     this.checkAllowed(command);
     if (context?.cancelled) throw new Error(T.errors.cancelledByLock);
   }
 
-  async send({ client, generation, parsed, command, received, verify, context }) {
-    const deadline = received + COMMAND_BUDGET_MS;
+  async send({ client, generation, serial, parsed, command, received, verify, context, socket }) {
+    // Nothing is written after this instant, whatever happens before.
+    const sendBy = received + COMMAND_BUDGET_MS;
     if (verify) {
-      if (deadline - this.now() < COMMAND_MIN_READ_MS) throw new Error(T.errors.tooSlow);
+      if (sendBy - this.now() < COMMAND_MIN_READ_MS) throw new Error(T.errors.tooSlow);
       let snapshot;
       try {
         snapshot = parseSnapshot(
-          await client.getData(['system'], { deadline: deadline - COMMAND_MIN_SEND_MS }),
+          await client.getData(['system'], { deadline: sendBy - COMMAND_MIN_SEND_MS }),
         );
       } catch (err) {
-        if (isTokenRefused(err)) {
-          await this.failed(err, generation);
-          throw new Error(T.errors.tokenRefused, { cause: err });
-        }
+        await this.commandFailed(err, generation);
+        if (isTokenRefused(err)) throw new Error(T.errors.tokenRefused, { cause: err });
         throw new Error(T.errors.unknownState(err), { cause: err });
       }
       if (snapshot.uuid !== parsed.uuid) throw new Error(T.errors.otherPc);
+      // The command goes on the connection of this fresh reading, and nowhere else.
+      socket = client.currentSocket();
+      if (!socket) throw new Error(T.errors.notSent({ code: CODES.CLOSED }));
     }
-    if (deadline - this.now() < (verify ? COMMAND_MIN_SEND_MS : 0)) {
+    if (sendBy - this.now() < (verify ? COMMAND_MIN_SEND_MS : 0)) {
       throw new Error(T.errors.tooSlow);
     }
     // The last check before sending: the user may have changed things meanwhile.
-    this.stillValid({ client, generation, command, context });
+    this.stillValid({ client, generation, serial, command, context });
     const data = command.kind === 'open' ? { url: this.config.openUrl } : {};
     try {
       await client.command(command.event, data, command.answer, {
         deadline: received + COMMAND_ACK_MS,
+        sendBy,
+        socket,
       });
     } catch (err) {
+      if (isTokenRefused(err) || SystemBridgeApp.isBusy(err)) {
+        await this.commandFailed(err, generation);
+      }
       if (isTokenRefused(err)) {
-        await this.failed(err, generation);
         throw new Error(T.errors.tokenRefused, { cause: err });
       }
       if (err instanceof BridgeError && err.code === CODES.REFUSED) {
@@ -605,17 +681,25 @@ export class SystemBridgeApp {
 
   /** Read the truth again in a moment (after a command), never before the next answer to Gladys. */
   refreshSoon(generation) {
-    if (generation !== this.generation) return;
+    // One reading waiting at most, whatever the number of commands.
+    if (generation !== this.generation || this.refreshPending) return;
+    this.refreshPending = true;
     this.schedule(INTERVALS.AFTER_COMMAND_MS, async () => {
+      this.refreshPending = false;
       if (generation !== this.generation || this.blocked || this.paused()) return;
       try {
         await this.read({ publish: false });
       } catch (err) {
         // The PC went to sleep or shut down: the loop says so at its pace.
-        if (isTokenRefused(err)) await this.failed(err, generation);
+        if (isTokenRefused(err) || SystemBridgeApp.isBusy(err)) await this.failed(err, generation);
         else this.logger.debug(`Reading after a command failed: ${err?.code ?? 'error'}`);
       }
     });
+  }
+
+  /** A refused token or a 429 / 503 met by a command: every path stops or pauses. */
+  async commandFailed(err, generation) {
+    if (isTokenRefused(err) || SystemBridgeApp.isBusy(err)) await this.failed(err, generation);
   }
 
   // --- Devices created / deleted in Gladys -----------------------------------

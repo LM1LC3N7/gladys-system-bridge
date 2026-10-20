@@ -1,7 +1,15 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { CODES } from '../src/bridge/errors.js';
-import { label, machineId, num, parseSnapshot, slug } from '../src/bridge/parse.js';
+import {
+  diskKey,
+  gpuKey,
+  label,
+  machineId,
+  num,
+  parseSnapshot,
+  slug,
+} from '../src/bridge/parse.js';
 import { windowsModules } from './helpers/fakeBridge.js';
 
 test('a Windows PC', () => {
@@ -59,6 +67,7 @@ test('a Linux laptop: system mounts left out, battery, duplicates keep the first
     [
       ['root', 40],
       ['boot-efi', 5],
+      [diskKey('/boot-efi'), 7],
     ],
   );
   assert.equal(s.battery, 87);
@@ -119,4 +128,46 @@ test('helpers', () => {
   assert.equal(slug('/'), '');
   assert.equal(machineId(' ABC-1 '), 'abc-1');
   assert.equal(machineId('a/b'), null);
+});
+
+test('disk keys are injective: simple mount points readable, the others hashed', () => {
+  assert.equal(diskKey('C:\\'), 'c');
+  assert.equal(diskKey('D:'), 'd');
+  assert.equal(diskKey('/'), 'root');
+  assert.equal(diskKey('/mnt/data'), 'mnt-data');
+  const odd = ['/root', '/mnt-data', '/mnt/My Data', '/MNT/data', '/mnt/data/', 'E:\\Games'];
+  const keys = new Set(['c', 'd', 'root', 'mnt-data', ...odd.map(diskKey)]);
+  assert.equal(keys.size, 4 + odd.length, 'no two mount points share a key');
+  for (const mount of odd) assert.match(diskKey(mount), /^[a-z0-9-]*_[0-9a-f]{6}$/, mount);
+  assert.equal(diskKey('/mnt-data'), diskKey('/mnt-data'), 'stable');
+});
+
+test('GPU keys come from the id only; under Windows, a non-NVIDIA temperature is dropped', () => {
+  assert.equal(gpuKey('GPU-0a1b'), 'gpu-0a1b');
+  assert.match(gpuKey('PCI\\VEN_8086&DEV_46A6'), /^[a-z0-9-]+_[0-9a-f]{6}$/);
+  assert.equal(gpuKey(''), null);
+  assert.equal(gpuKey(undefined), null);
+  const s = parseSnapshot(
+    windowsModules({
+      gpus: [
+        { name: 'no id', core_load: 1 },
+        { id: 'VideoController1', name: 'Intel UHD 770', core_load: 2, temperature: 55 },
+        { id: 'nvidia-0', name: 'NVIDIA RTX 4060', core_load: 3, temperature: 41 },
+      ],
+    }),
+  );
+  assert.deepEqual(
+    s.gpus.map((g) => [g.key, g.temperature]),
+    [
+      ['videocontroller1', null],
+      ['nvidia-0', 41],
+    ],
+  );
+  const linux = parseSnapshot(
+    windowsModules({
+      system: { ...windowsModules().system, platform: 'linux' },
+      gpus: [{ id: 'card0', name: 'AMD Radeon', temperature: 50 }],
+    }),
+  );
+  assert.equal(linux.gpus[0].temperature, 50);
 });

@@ -48,15 +48,20 @@ survives a rename or a new IP address):
 | Lock, Sleep, Hibernate, Restart, Shut down, Open the URL | buttons                                                     |
 
 A disk or a GPU seen once stays on the device (it shows no value while it is
-absent), so that its history is never lost.
+absent), so that its history is never lost. Under Windows, only NVIDIA cards
+report a GPU temperature (for the others, Windows gives a zone of the board,
+not the card).
 
 The PC is read at the pace chosen in **Refresh** (every minute by default).
 When it does not answer, Gladys tries again 30 seconds to 5 minutes later,
-never faster than that pace.
+never faster than that pace. The Discovery button shows the last reading when
+it is more recent than that pace.
 
 ## Buttons and safety
 
-- **Lock** locks the session; it is always allowed (it protects the PC).
+- **Lock** locks the session; it is always allowed (it protects the PC), but
+  only while Gladys is connected to that PC (it never opens a connection of
+  its own, so it is refused while System Bridge asked Gladys to slow down).
 - **Sleep, Hibernate, Restart, Shut down** are refused until you tick
   **Allow sleep, hibernate, restart and shut down**. Unsaved work on the PC is
   lost on a restart or a shut down. Never allow them on the PC that runs
