@@ -1,6 +1,6 @@
 {
   "name": "gladys-system-bridge",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "description": "Gladys Assistant external integration for System Bridge: the sensors of a Windows or Linux PC (CPU, memory, disks, GPU, battery) and its lock, sleep, restart and shut down buttons, through the local WebSocket API of System Bridge. Unofficial, not affiliated with System Bridge.",
   "type": "module",
